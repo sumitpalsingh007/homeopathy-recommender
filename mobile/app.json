@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "Dr. Samuel",
+    "slug": "homeo-ai",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "extra": { "apiBase": "https://api.homeo-ai.example.com/api" }
+  }
+}
