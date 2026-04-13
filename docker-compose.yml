@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: homeo-postgres
+    environment:
+      POSTGRES_USER: homeo
+      POSTGRES_PASSWORD: homeo
+      POSTGRES_DB: homeo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homeo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - homeo-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: homeo-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"
+    volumes:
+      - ollama_data:/root/.ollama
+    command: sh -c "ollama serve & sleep 5 && ollama pull llama3.1:8b-instruct-q4_0 && ollama pull nomic-embed-text && wait"
+    restart: unless-stopped
+    networks:
+      - homeo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: homeo-backend
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: "jdbc:postgresql://postgres:5432/homeo"
+      DB_USER: "homeo"
+      DB_PASSWORD: "homeo"
+      JWT_SECRET: "dev-secret-change-in-prod-at-least-256-bits"
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_CHAT_MODEL: "llama3.1:8b-instruct-q4_0"
+      OLLAMA_EMBED_MODEL: "nomic-embed-text"
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:19006"
+      JAVA_OPTS: "-Xms512m -Xmx1g"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - homeo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.dev
+    container_name: homeo-web
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: "http://localhost:8080/api"
+    depends_on:
+      - backend
+    networks:
+      - homeo-net
+    volumes:
+      - ./web/src:/app/src
+      - ./web/index.html:/app/index.html
+
+volumes:
+  postgres_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+networks:
+  homeo-net:
+    driver: bridge

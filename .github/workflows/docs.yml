@@ -1,0 +1,171 @@
+name: docs-to-confluence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'QUICK_START.md'
+      - 'DEPLOYMENT_RUNBOOK.md'
+      - 'DEPLOYMENT_REVIEW.md'
+      - 'OPS_GUIDE.md'
+      - 'EC2_SPOT_VS_ONDEMAND.md'
+      - 'DEPLOYMENT_SUMMARY.md'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECRETS REQUIRED (set in GitHub → Settings → Secrets → Actions):
+#
+#  CONFLUENCE_URL          Your Confluence base URL (no trailing slash).
+#                          Atlassian Cloud:  https://your-org.atlassian.net/wiki
+#                          Server/Data Center: https://confluence.your-org.com
+#
+#  CONFLUENCE_EMAIL        Email address of the Confluence user to publish as.
+#                          (Must be an admin or have "Create Page" permission)
+#
+#  CONFLUENCE_API_TOKEN    API token for the user above.
+#                          Create at: https://id.atlassian.com/manage-profile/security/api-tokens
+#
+#  CONFLUENCE_SPACE_KEY    The Confluence space where docs will be published.
+#                          Find it: Confluence → Space settings → Space details → Key
+#                          Example: HOMEO, DEV, TECH
+#
+#  CONFLUENCE_PARENT_PAGE  (Optional) Title of the parent page under which docs appear.
+#                          Default: "Homeo AI" (will be created if it doesn't exist)
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  publish:
+    name: Publish Docs to Confluence
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests markdown2
+
+      # Single Python script that:
+      # 1. Checks if each page exists (GET by title)
+      # 2. Creates it (POST) or updates it (PUT) with new content
+      # 3. Converts Markdown → Confluence Storage Format (XHTML)
+      - name: Publish all docs
+        env:
+          CONFLUENCE_URL:         ${{ secrets.CONFLUENCE_URL }}
+          CONFLUENCE_EMAIL:       ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN:   ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_SPACE_KEY:   ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          CONFLUENCE_PARENT_PAGE: ${{ secrets.CONFLUENCE_PARENT_PAGE || 'Homeo AI' }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys, json, re, requests, markdown2
+          from pathlib import Path
+
+          BASE_URL    = os.environ["CONFLUENCE_URL"].rstrip("/")
+          EMAIL       = os.environ["CONFLUENCE_EMAIL"]
+          TOKEN       = os.environ["CONFLUENCE_API_TOKEN"]
+          SPACE       = os.environ["CONFLUENCE_SPACE_KEY"]
+          PARENT_TITLE= os.environ["CONFLUENCE_PARENT_PAGE"]
+          AUTH        = (EMAIL, TOKEN)
+          HEADERS     = {"Content-Type": "application/json", "Accept": "application/json"}
+          API         = f"{BASE_URL}/rest/api/content"
+
+          DOCS = [
+              ("Homeo AI — Overview",          "README.md"),
+              ("Quick Start",                  "QUICK_START.md"),
+              ("Deployment Runbook",           "DEPLOYMENT_RUNBOOK.md"),
+              ("Deployment Review",            "DEPLOYMENT_REVIEW.md"),
+              ("Ops Guide",                    "OPS_GUIDE.md"),
+              ("EC2 Spot vs On-Demand",        "EC2_SPOT_VS_ONDEMAND.md"),
+              ("Deployment Summary",           "DEPLOYMENT_SUMMARY.md"),
+          ]
+
+          def find_page(title, space):
+              r = requests.get(API, params={"title": title, "spaceKey": space, "expand": "version"}, auth=AUTH, headers=HEADERS)
+              r.raise_for_status()
+              results = r.json().get("results", [])
+              return results[0] if results else None
+
+          def md_to_confluence(md_text):
+              # markdown2 → HTML, then wrap in Confluence storage format
+              html = markdown2.markdown(md_text, extras=["fenced-code-blocks", "tables", "header-ids"])
+              # Replace <code> blocks with Confluence macro
+              html = re.sub(
+                  r'<pre><code(?:\s+class="([^"]*)")?>(.*?)</code></pre>',
+                  lambda m: (
+                      f'<ac:structured-macro ac:name="code">'
+                      f'<ac:parameter ac:name="language">{(m.group(1) or "text").replace("language-","")}</ac:parameter>'
+                      f'<ac:plain-text-body><![CDATA[{m.group(2)}]]></ac:plain-text-body>'
+                      f'</ac:structured-macro>'
+                  ),
+                  html, flags=re.DOTALL
+              )
+              return html
+
+          def create_or_update(title, md_text, parent_id):
+              body = md_to_confluence(md_text)
+              existing = find_page(title, SPACE)
+
+              if existing:
+                  page_id = existing["id"]
+                  version = existing["version"]["number"] + 1
+                  payload = {
+                      "version": {"number": version},
+                      "title": title,
+                      "type": "page",
+                      "body": {"storage": {"value": body, "representation": "storage"}}
+                  }
+                  r = requests.put(f"{API}/{page_id}", json=payload, auth=AUTH, headers=HEADERS)
+                  r.raise_for_status()
+                  print(f"  ✓ Updated: {title}  (v{version})")
+              else:
+                  payload = {
+                      "type": "page",
+                      "title": title,
+                      "space": {"key": SPACE},
+                      "ancestors": [{"id": parent_id}] if parent_id else [],
+                      "body": {"storage": {"value": body, "representation": "storage"}}
+                  }
+                  r = requests.post(API, json=payload, auth=AUTH, headers=HEADERS)
+                  r.raise_for_status()
+                  print(f"  ✓ Created: {title}")
+
+          # Ensure parent page exists
+          parent = find_page(PARENT_TITLE, SPACE)
+          if not parent:
+              r = requests.post(API, json={
+                  "type": "page", "title": PARENT_TITLE,
+                  "space": {"key": SPACE},
+                  "body": {"storage": {"value": "<p>Homeo AI project documentation.</p>", "representation": "storage"}}
+              }, auth=AUTH, headers=HEADERS)
+              r.raise_for_status()
+              parent = r.json()
+              print(f"  ✓ Created parent page: {PARENT_TITLE}")
+
+          parent_id = parent["id"]
+
+          # Publish each document
+          errors = []
+          for title, filename in DOCS:
+              path = Path(filename)
+              if not path.exists():
+                  print(f"  ⚠ Skipped (file not found): {filename}")
+                  continue
+              try:
+                  create_or_update(title, path.read_text(encoding="utf-8"), parent_id)
+              except Exception as e:
+                  print(f"  ✗ Failed: {title}: {e}")
+                  errors.append(title)
+
+          if errors:
+              print(f"\n✗ Failed pages: {errors}")
+              sys.exit(1)
+          else:
+              print(f"\n✓ All docs published to Confluence space '{SPACE}' under '{PARENT_TITLE}'")
+          PYEOF

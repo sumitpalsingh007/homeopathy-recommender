@@ -1,0 +1,299 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  HOMEO AI MVP ARCHITECTURE — SPOT + ASG                      ║
+║                         (April 1–30, Free Tier)                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              USER ACCESS LAYER                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  React Web (npm run build)        React Native (Expo)
+         │                                 │
+         │                                 │
+         └──────────────┬──────────────────┘
+                        │
+              ┌─────────▼────────┐
+              │   CloudFront     │ ← HTTPS, edge caching, DDoS protection
+              │   Distribution   │   Cost: $0–1/mo (1 TB free)
+              └─────────┬────────┘
+                        │
+              ┌─────────▼────────┐
+              │   S3 Bucket      │ ← Static web UI (dist/ folder)
+              │  (web_bucket)    │   Cost: $0 (5 GB free)
+              └──────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              API GATEWAY LAYER                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  /api/auth/signup, /api/auth/login, /api/chat, /api/chat/stream, ...
+         │                            │
+         └────────────┬───────────────┘
+                      │
+        ┌─────────────▼──────────────┐
+        │  Security Group (SG-APP)   │ ← port 8080 open to 0.0.0.0/0
+        │  VPC: 10.20.0.0/16         │
+        └─────────────┬──────────────┘
+                      │
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         COMPUTE LAYER (EC2 + ASG)                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Auto-Scaling Group (ASG)                                       │
+  │  • min_size: 1                                                  │
+  │  • max_size: 1                                                  │
+  │  • capacity_rebalance: true (auto-recovery on Spot interrupt)   │
+  │  • launch_template: Spot t3.micro                               │
+  │  Cost: $2–3/mo (70% discount from $12/mo on-demand)            │
+  │                                                                 │
+  │  ┌────────────────────────────────────────────────────────┐    │
+  │  │ EC2 Instance (t3.micro Spot)                           │    │
+  │  │ • Public IP assigned                                   │    │
+  │  │ • Amazon Linux 2 AMI                                   │    │
+  │  │ • 1 vCPU, 1 GB RAM                                     │    │
+  │  │ • 30 GB ephemeral storage (for Docker layers)          │    │
+  │  │                                                         │    │
+  │  │ ┌─────────────────────────────────────────────────┐   │    │
+  │  │ │ docker-compose: backend + ollama sidecar       │   │    │
+  │  │ │                                                 │   │    │
+  │  │ │ ┌─────────────────┐  ┌───────────────────┐    │   │    │
+  │  │ │ │ Spring Boot App │  │  Ollama Engine    │    │   │    │
+  │  │ │ │ (port 8080)     │  │  (port 11434)     │    │   │    │
+  │  │ │ │                 │  │                   │    │   │    │
+  │  │ │ │ • ChatClient    │  │ • llama3.1:8b-   │    │   │    │
+  │  │ │ │ • Tools         │  │   instruct-q4_0   │    │   │    │
+  │  │ │ │ • RAG advisors  │  │ • nomic-embed-    │    │   │    │
+  │  │ │ │ • JWT auth      │  │   text            │    │   │    │
+  │  │ │ │ • Flyway        │  │ • 15 GB cached    │    │   │    │
+  │  │ │ └──────────┬──────┘  └────────┬──────────┘    │   │    │
+  │  │ │            │                  │                │   │    │
+  │  │ │            └──────────┬───────┘                │   │    │
+  │  │ │                       │ (localhost:11434)      │   │    │
+  │  │ │                       ↓                        │   │    │
+  │  │ │            ┌─────────────────┐                │   │    │
+  │  │ │            │  Docker Compose │                │   │    │
+  │  │ │            │  (docker logs)  │                │   │    │
+  │  │ │            └─────────────────┘                │   │    │
+  │  │ └─────────────────────────────────────────────────┘   │    │
+  │  │                      ▲                                 │    │
+  │  │                      │                                 │    │
+  │  │          ┌───────────┴──────────────┐                 │    │
+  │  │          │ CloudWatch Logs          │                 │    │
+  │  │          │ (/ec2/homeo-ai-backend)  │                 │    │
+  │  │          └──────────────────────────┘                 │    │
+  │  └────────────────────────────────────────────────────────┘    │
+  │                                                                 │
+  │  User data script (runs once on boot):                         │
+  │  • Install Docker                                             │
+  │  • Download backend Docker image                              │
+  │  • docker-compose pull & build                                │
+  │  • Ollama pulls models (10 min first time)                    │
+  │  • Spring Boot starts (~1 min)                                │
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ JDBC
+                              ↓
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DATABASE LAYER (RDS)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ RDS Postgres 16 (Single-AZ, publicly NOT accessible)    │
+  │ Instance: db.t4g.micro                                   │
+  │ Allocated storage: 20 GB (gp3)                          │
+  │ Cost: $2–3/mo (750 hrs free tier + slight overage)      │
+  │                                                          │
+  │ Extensions:                                              │
+  │ • pgvector (vector similarity search, HNSW index)       │
+  │ • uuid-ossp (for vector IDs)                            │
+  │                                                          │
+  │ Tables:                                                  │
+  │ • patient (users, email, password_hash)                 │
+  │ • medicine (654 remedies, descriptions, modalities)    │
+  │ • kent_rubric (222k rubric entries, indexed)            │
+  │ • consultation (chat sessions, history)                 │
+  │ • medicine_vectors (768-dim embeddings, HNSW)           │
+  │                                                          │
+  │ Security:                                                │
+  │ • Security Group: only accepts port 5432 from app SG   │
+  │ • Not publicly accessible (publicly_accessible=false)   │
+  │ • Automatic daily backup (1 day retention)              │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+                         ▲                        │
+                         │                        │
+                ┌────────┴─────────┐              │
+                │ Shared VPC       │              │
+                │ 10.20.0.0/16     │              │
+                │ Public subnets   │              │
+                │ (no NAT GW)      │              │
+                └──────────────────┘              │
+                                                   │
+                                      (no read replicas)
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          NETWORKING & SECURITY                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Internet Gateway (IGW)
+         │
+         ↓
+  ┌─────────────────────────────┐
+  │ Route Table (Public)        │
+  │ 0.0.0.0/0 → IGW            │
+  └─────────────────────────────┘
+         │
+         ├─→ Public Subnet A (10.20.0.0/24, AZ-1)
+         │   └─→ EC2 Instance (assigned public IP)
+         │
+         └─→ Public Subnet B (10.20.1.0/24, AZ-2)
+             └─→ RDS Multi-AZ standby (if enabled)
+
+
+  Security Groups:
+
+  ┌─────────────────────────────┐
+  │ SG-APP (backend)            │
+  │ Inbound:                    │
+  │  • 8080 from 0.0.0.0/0 ✓   │
+  │ Outbound:                   │
+  │  • all to 0.0.0.0/0 ✓       │
+  └─────────────────────────────┘
+         │
+         └─→ Used by: EC2 instance
+
+  ┌─────────────────────────────┐
+  │ SG-DB (database)            │
+  │ Inbound:                    │
+  │  • 5432 from SG-APP ✓       │
+  │ Outbound:                   │
+  │  • all to 0.0.0.0/0 ✓       │
+  └─────────────────────────────┘
+         │
+         └─→ Used by: RDS instance
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            MONITORING & LOGGING                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  CloudWatch Logs:
+  • /ec2/homeo-ai-backend
+    - user-data.log (EC2 startup)
+    - ollama (Ollama logs, model pull)
+    - backend (Spring Boot application logs)
+
+  CloudWatch Alarms:
+  • ASG health (warns if instance unhealthy)
+  • RDS CPU/storage (optional)
+  • Lambda invocations (if using Lambda)
+
+  Metrics:
+  • EC2: CPU, network in/out, status checks
+  • RDS: CPU, storage, connections, replication lag (if multi-AZ)
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                              COST BREAKDOWN                                  ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  EC2 Spot t3.micro:       $0 (free tier 750 hrs/mo, you use 720)
+  RDS Postgres micro:      $2–3 (750 hrs free, slight overage)
+  CloudFront + S3:         $0–1 (1 TB free, you use ~10 MB)
+  CloudWatch logs:         <$1 (7-day retention)
+  ───────────────────────────────────────────────────
+  TOTAL:                   $2–5/mo ✓
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                         SPOT INSTANCE BEHAVIOR                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  Normal operation:
+  ┌─────────────────────────────────────────────────────┐
+  │ Your instance is running (2–3 sec response time)   │
+  └─────────────────────────────────────────────────────┘
+
+  Spot interruption (rare, 1–2x/month):
+  ┌──────────────────────────────────────────────────────┐
+  │ 14:23:10  AWS: "We need this capacity back"         │
+  │           Instance metadata endpoint returns timeout │
+  │ 14:23:15  CloudWatch detects unhealthy instance     │
+  │ 14:23:16  ASG launches replacement (from template)  │
+  │ 14:25:00  New instance boots, user_data.sh runs     │
+  │ 14:26:00  Ollama models cached (fast), app starts   │
+  │ 14:26:30  ✓ Back online                             │
+  │                                                      │
+  │ User experience: 3 min of 404 errors (retries), then works
+  │ Acceptable for MVP; unacceptable for production     │
+  └──────────────────────────────────────────────────────┘
+
+  Resolution: ASG capacity_rebalance = true → auto-recovery
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          RESPONSE TIME PROFILE                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  First message (cold start):
+    CloudFront:        50 ms
+    Spring Boot:       500 ms
+    Ollama (load):     2,000–3,000 ms
+    ────────────────────────────────
+    TOTAL:             2.5–3.5 sec ✓
+
+  Subsequent messages (warm):
+    CloudFront:        50 ms
+    Spring Boot:       500 ms
+    Ollama (cached):   2,000–3,000 ms
+    ────────────────────────────────
+    TOTAL:             2.5–3.5 sec ✓
+
+  After 15 min idle (Lambda would freeze, EC2 doesn't):
+    Same as above: 2.5–3.5 sec ✓
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                           SCALING ROADMAP                                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  April 1–30 (MVP, <10 req/day):
+    └─→ EC2 Spot t3.micro + RDS micro = $2–5/mo ✓
+
+  May 1–Jun 30 (Growth, 100–1000 req/day):
+    Option A: Increase to t3.small + ALB + 2 instances = $25–30/mo
+    Option B: Migrate to ECS Fargate = $35+/mo
+    Option C: Keep Spot, add caching (ElastiCache) = $15–20/mo
+    └─→ Same Docker image, same RDS, just scale horizontally
+
+  July+ (Production, >1000 req/day):
+    └─→ Full Fargate + managed services = $50–100+/mo
+    └─→ Multi-region (if needed) = $100–200+/mo
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                             IMPLEMENTATION NOTES                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  • Ollama model (llama3.1:8b-instruct-q4_0) is ~15 GB; cached in EC2 ephemeral
+  • First startup takes ~10 min (model download); subsequent restarts ~1 min
+  • Medicine data (654 remedies, 222k rubric entries) pre-loaded into RDS + vectors
+  • JWT tokens expire in 24 hours (configurable in application.yml)
+  • CloudWatch logs retained for 7 days (configurable)
+  • No WAF, no multi-AZ, no cross-region (MVP optimizations for cost)
+
+
+For more details, see:
+  • DEPLOYMENT_REVIEW.md (architecture decisions)
+  • DEPLOYMENT_RUNBOOK.md (step-by-step deploy)
+  • OPS_GUIDE.md (monitoring & troubleshooting)
+  • QUICK_START.md (5-min test, 15-min deploy)
+

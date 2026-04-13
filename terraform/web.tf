@@ -53,7 +53,11 @@ resource "aws_cloudfront_distribution" "web" {
 
   viewer_certificate { cloudfront_default_certificate = true }
 
-  restrictions { geo_restriction { restriction_type = "none" } }
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "web" {
