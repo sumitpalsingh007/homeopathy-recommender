@@ -71,8 +71,8 @@ Replace `YOUR_ORG` and `YOUR_REPO` with your GitHub org and repo name.
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-ORG="YOUR_ORG"     # e.g. sumitpalsingh007
-REPO="YOUR_REPO"   # e.g. homeopathy-scraper
+ORG="sumitpalsingh007"            # e.g. sumitpalsingh007
+REPO="homeopathy-recommender"   # correct repo name
 
 cat > trust-policy.json << EOF
 {
@@ -88,7 +88,7 @@ cat > trust-policy.json << EOF
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
       },
       "StringLike": {
-        "token.actions.githubusercontent.com:sub": "repo:${ORG}/${REPO}:*"
+        "token.actions.githubusercontent.com:sub": "repo:sumitpalsingh007/homeopathy-recommender:*"
       }
     }
   }]
