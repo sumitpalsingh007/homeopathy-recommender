@@ -129,6 +129,22 @@ jobs:
           DEPLOY_B64=$(base64 -w0 << 'DEPLOY_EOF'
           #!/bin/bash
           set -euo pipefail
+
+          # ── Ensure Docker Compose v2 plugin is present ──────────────────────
+          # Instances launched before the plugin was added to user_data.sh won't
+          # have it. Install inline so deploys are self-healing.
+          if ! docker compose version > /dev/null 2>&1; then
+            echo "Docker Compose v2 not found – installing plugin..."
+            mkdir -p /usr/local/lib/docker/cli-plugins
+            curl -fsSL \
+              "https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64" \
+              -o /usr/local/lib/docker/cli-plugins/docker-compose
+            chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            echo "Docker Compose v2 installed: $(docker compose version)"
+          else
+            echo "Docker Compose: $(docker compose version)"
+          fi
+
           cd /opt/homeo-ai
 
           echo "=== Pulling latest backend image ==="
