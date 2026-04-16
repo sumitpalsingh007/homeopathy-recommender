@@ -49,7 +49,7 @@ terraform apply -var="db_password=..." -var="jwt_secret=..."
 ## 🏗️ Project structure
 
 ```
-homeopathy-scraper/
+homeopathy-recommender/
 ├── backend/                  # Spring Boot API
 │   ├── src/main/java/
 │   │   └── com/homeo/ai/

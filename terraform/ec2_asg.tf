@@ -121,7 +121,7 @@ resource "aws_autoscaling_group" "backend" {
   # Capacity rebalancing: replaces Spot instances before termination
   capacity_rebalance  = true
 
-  health_check_type         = "ELB"
+  health_check_type         = "EC2"   # no ALB in this stack; EC2 checks instance reachability
   health_check_grace_period = 300
 
   launch_template {

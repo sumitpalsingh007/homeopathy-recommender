@@ -26,7 +26,7 @@ provider "aws" {
       Project     = var.project
       Environment = "mvp"
       ManagedBy   = "terraform"
-      Repo        = "homeopathy-scraper"
+      Repo        = "homeopathy-recommender"
     }
   }
 }

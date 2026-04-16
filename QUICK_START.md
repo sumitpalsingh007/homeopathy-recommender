@@ -7,7 +7,7 @@
 ## 1. Local testing (5 min)
 
 ```bash
-cd homeopathy-scraper
+cd homeopathy-recommender
 
 # Copy medicine data
 cp src/main/resources/medicine_master.csv backend/src/main/resources/
