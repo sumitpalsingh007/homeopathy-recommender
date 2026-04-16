@@ -32,7 +32,7 @@ React Native (Expo)           ├──→ Security Group (port 8080)
 ### 1.1 Start local stack
 
 ```bash
-cd homeopathy-scraper
+cd homeopathy-recommender
 
 # Copy medicine CSV to backend
 cp src/main/resources/medicine_master.csv backend/src/main/resources/

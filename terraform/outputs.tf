@@ -13,7 +13,11 @@ output "backend_security_group" { value = aws_security_group.app.id }
 output "backend_log_group"      { value = aws_cloudwatch_log_group.backend.name }
 
 # ECR — copy these into GitHub Secrets after first terraform apply
-output "ecr_registry"    { value = aws_ecr_repository.backend.registry_id }
+# ecr_registry = the registry host only (no repo suffix) → set as ECR_REGISTRY secret
+# Format: 123456789012.dkr.ecr.ap-south-1.amazonaws.com
+output "ecr_registry" {
+  value = "${data.aws_caller_identity.me.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+}
 output "ecr_repo_url"    { value = aws_ecr_repository.backend.repository_url }
 
 # EFS — informational
