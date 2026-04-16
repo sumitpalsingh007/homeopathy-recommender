@@ -128,8 +128,8 @@ jobs:
               "cd /opt/homeo-ai",
               "docker-compose pull backend",
               "docker-compose up -d --no-deps backend",
-              "sleep 15",
-              "curl -f http://localhost:8080/actuator/health || (echo HEALTH_CHECK_FAILED; exit 1)"
+              "echo Waiting for Spring Boot to become healthy (up to 3 min)...",
+              "for i in $(seq 1 18); do if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then echo OK - backend healthy after $((i * 10))s; exit 0; fi; echo Attempt $i/18 - not ready yet, retrying in 10s...; sleep 10; done; echo HEALTH_CHECK_FAILED - backend did not become healthy within 180s; docker-compose logs --tail=50 backend; exit 1"
             ]' \
             --timeout-seconds 300 \
             --region ${{ env.AWS_REGION }} \
